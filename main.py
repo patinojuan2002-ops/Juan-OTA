@@ -97,6 +97,7 @@ def leer_sensor():
     print("P:", p, "mg/kg")
     print("K:", k, "mg/kg")
     print("-----------------------")
+    print("esta es nueva version")
 
 # =========================
 # BUCLE PRINCIPAL
