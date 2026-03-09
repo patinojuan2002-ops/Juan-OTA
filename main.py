@@ -1,4 +1,61 @@
-#hola
-# This is a test file of the OTA code
+import machine
+import time
 
-print('Hello World')
+led = machine.Pin("LED", machine.Pin.OUT)
+uart = machine.UART(0, baudrate=9600, tx=machine.Pin(0), rx=machine.Pin(1))
+
+def send_modbus_query(query):
+    uart.write(query)
+    time.sleep(0.3)
+    return uart.read()
+
+led_timer = machine.Timer()
+
+def led_toggle(timer):
+    led.toggle()
+
+def led_start(period_ms=300):
+    led_timer.init(period=period_ms, mode=machine.Timer.PERIODIC, callback=led_toggle)
+
+def led_stop():
+    led_timer.deinit()
+    led.value(0)
+
+Q_PH       = bytes([0x01,0x03,0x00,0x06,0x00,0x01,0x64,0x0B])
+Q_HUM_TEMP = bytes([0x01,0x03,0x00,0x12,0x00,0x02,0x64,0x0E])
+Q_EC       = bytes([0x01,0x03,0x00,0x15,0x00,0x01,0x95,0xCE])
+Q_NPK      = bytes([0x01,0x03,0x00,0x1E,0x00,0x03,0x65,0xCD])
+
+def main():
+    while True:
+        led_start()
+        r = send_modbus_query(Q_PH)
+        ph = ((r[3] << 8) | r[4]) / 100 if r else None
+        r = send_modbus_query(Q_HUM_TEMP)
+        if r and len(r) >= 7:
+            hum  = ((r[3] << 8) | r[4]) / 10
+            temp = ((r[5] << 8) | r[6]) / 10
+        else:
+            hum = temp = None
+        r = send_modbus_query(Q_EC)
+        ec = (r[3] << 8) | r[4] if r else None
+        r = send_modbus_query(Q_NPK)
+        if r and len(r) >= 9:
+            n = (r[3] << 8) | r[4]
+            p = (r[5] << 8) | r[6]
+            k = (r[7] << 8) | r[8]
+        else:
+            n = p = k = None
+        led_stop()
+        print("pH:", ph)
+        print("Humedad:", hum, "%")
+        print("Temperatura:", temp, "°C")
+        print("EC:", ec, "uS/cm")
+        print("N:", n, "mg/kg")
+        print("P:", p, "mg/kg")
+        print("K:", k, "mg/kg")
+        print("-----------------------")
+        time.sleep(2)
+
+if __name__ == "__main__":
+    main()
