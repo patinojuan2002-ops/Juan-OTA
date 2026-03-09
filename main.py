@@ -1,17 +1,13 @@
 import machine
 import time
-import network
-import urequests
-import os
-import json
+import WIFI_CONFIG
+from ota import OTAUpdater
 
 # =========================
-# CONFIGURACIÓN WIFI Y OTA
+# CONFIGURACIÓN OTA
 # =========================
-SSID     = "nombre_de_tu_wifi"
-PASSWORD = "tu_contraseña"
-REPO_URL = "https://raw.githubusercontent.com/patinojuan2002-ops/Juan-OTA/main/"
-CHECK_INTERVAL = 60  # segundos entre cada chequeo de actualización
+REPO_URL       = "https://github.com/patinojuan2002-ops/Juan-OTA/"
+CHECK_INTERVAL = 60  # segundos entre chequeos
 
 # =========================
 # LED integrado
@@ -52,63 +48,15 @@ Q_EC       = bytes([0x01,0x03,0x00,0x15,0x00,0x01,0x95,0xCE])
 Q_NPK      = bytes([0x01,0x03,0x00,0x1E,0x00,0x03,0x65,0xCD])
 
 # =========================
-# WIFI
+# CHEQUEO OTA
 # =========================
-def connect_wifi():
-    sta = network.WLAN(network.STA_IF)
-    sta.active(True)
-    if not sta.isconnected():
-        print("Conectando WiFi...")
-        sta.connect(SSID, PASSWORD)
-        timeout = 15
-        while not sta.isconnected() and timeout > 0:
-            time.sleep(1)
-            timeout -= 1
-    if sta.isconnected():
-        print("WiFi OK:", sta.ifconfig()[0])
-        return True
-    print("WiFi FALLÓ")
-    return False
-
-# =========================
-# OTA
-# =========================
-def get_local_version():
-    try:
-        with open('version.json') as f:
-            return int(json.load(f)['version'])
-    except:
-        with open('version.json', 'w') as f:
-            json.dump({'version': 0}, f)
-        return 0
-
 def check_and_update():
     print("Chequeando actualizaciones...")
-    if not connect_wifi():
-        return
-
     try:
-        # Chequear versión remota
-        r = urequests.get(REPO_URL + "version.json")
-        remote_version = int(json.loads(r.text)['version'])
-        local_version  = get_local_version()
-        print(f"Versión local: {local_version} | Versión remota: {remote_version}")
-
-        if remote_version > local_version:
-            print("Nueva versión encontrada, descargando...")
-            r = urequests.get(REPO_URL + "main.py")
-            if r.status_code == 200:
-                with open('main_new.py', 'w') as f:
-                    f.write(r.text)
-                with open('version.json', 'w') as f:
-                    json.dump({'version': remote_version}, f)
-                os.rename('main_new.py', 'main.py')
-                print("Actualización lista, reiniciando...")
-                time.sleep(2)
-                machine.reset()
-        else:
-            print("Ya tengo la última versión.")
-
+        ota = OTAUpdater(WIFI_CONFIG.SSID, WIFI_CONFIG.PASSWORD, REPO_URL, "main.py")
+        ota.download_and_install_update_if_available()
+        # Si hay update, la Pico se reinicia sola dentro del OTAUpdater
+        # Si no hay update, continúa normalmente
     except Exception as e:
         print("Error OTA:", e)
 
@@ -157,15 +105,12 @@ def main():
     ultimo_chequeo = time.time() - CHECK_INTERVAL  # chequea inmediatamente al arrancar
 
     while True:
-        # Chequear OTA cada CHECK_INTERVAL segundos
         if time.time() - ultimo_chequeo >= CHECK_INTERVAL:
             check_and_update()
             ultimo_chequeo = time.time()
 
-        # Leer y mostrar sensor
         leer_sensor()
         time.sleep(2)
 
 if __name__ == "__main__":
     main()
-
