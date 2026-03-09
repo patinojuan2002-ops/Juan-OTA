@@ -1,7 +1,26 @@
 import machine
 import time
+import network
+import urequests
+import os
+import json
 
+# =========================
+# CONFIGURACIÓN WIFI Y OTA
+# =========================
+SSID     = "nombre_de_tu_wifi"
+PASSWORD = "tu_contraseña"
+REPO_URL = "https://raw.githubusercontent.com/patinojuan2002-ops/Juan-OTA/main/"
+CHECK_INTERVAL = 60  # segundos entre cada chequeo de actualización
+
+# =========================
+# LED integrado
+# =========================
 led = machine.Pin("LED", machine.Pin.OUT)
+
+# =========================
+# UART RS485
+# =========================
 uart = machine.UART(0, baudrate=9600, tx=machine.Pin(0), rx=machine.Pin(1))
 
 def send_modbus_query(query):
@@ -9,6 +28,9 @@ def send_modbus_query(query):
     time.sleep(0.3)
     return uart.read()
 
+# =========================
+# TIMER LED SIMPLE
+# =========================
 led_timer = machine.Timer()
 
 def led_toggle(timer):
@@ -21,41 +43,129 @@ def led_stop():
     led_timer.deinit()
     led.value(0)
 
+# =========================
+# TRAMAS MODBUS
+# =========================
 Q_PH       = bytes([0x01,0x03,0x00,0x06,0x00,0x01,0x64,0x0B])
 Q_HUM_TEMP = bytes([0x01,0x03,0x00,0x12,0x00,0x02,0x64,0x0E])
 Q_EC       = bytes([0x01,0x03,0x00,0x15,0x00,0x01,0x95,0xCE])
 Q_NPK      = bytes([0x01,0x03,0x00,0x1E,0x00,0x03,0x65,0xCD])
 
+# =========================
+# WIFI
+# =========================
+def connect_wifi():
+    sta = network.WLAN(network.STA_IF)
+    sta.active(True)
+    if not sta.isconnected():
+        print("Conectando WiFi...")
+        sta.connect(SSID, PASSWORD)
+        timeout = 15
+        while not sta.isconnected() and timeout > 0:
+            time.sleep(1)
+            timeout -= 1
+    if sta.isconnected():
+        print("WiFi OK:", sta.ifconfig()[0])
+        return True
+    print("WiFi FALLÓ")
+    return False
+
+# =========================
+# OTA
+# =========================
+def get_local_version():
+    try:
+        with open('version.json') as f:
+            return int(json.load(f)['version'])
+    except:
+        with open('version.json', 'w') as f:
+            json.dump({'version': 0}, f)
+        return 0
+
+def check_and_update():
+    print("Chequeando actualizaciones...")
+    if not connect_wifi():
+        return
+
+    try:
+        # Chequear versión remota
+        r = urequests.get(REPO_URL + "version.json")
+        remote_version = int(json.loads(r.text)['version'])
+        local_version  = get_local_version()
+        print(f"Versión local: {local_version} | Versión remota: {remote_version}")
+
+        if remote_version > local_version:
+            print("Nueva versión encontrada, descargando...")
+            r = urequests.get(REPO_URL + "main.py")
+            if r.status_code == 200:
+                with open('main_new.py', 'w') as f:
+                    f.write(r.text)
+                with open('version.json', 'w') as f:
+                    json.dump({'version': remote_version}, f)
+                os.rename('main_new.py', 'main.py')
+                print("Actualización lista, reiniciando...")
+                time.sleep(2)
+                machine.reset()
+        else:
+            print("Ya tengo la última versión.")
+
+    except Exception as e:
+        print("Error OTA:", e)
+
+# =========================
+# LECTURA DEL SENSOR
+# =========================
+def leer_sensor():
+    led_start()
+
+    r = send_modbus_query(Q_PH)
+    ph = ((r[3] << 8) | r[4]) / 100 if r else None
+
+    r = send_modbus_query(Q_HUM_TEMP)
+    if r and len(r) >= 7:
+        hum  = ((r[3] << 8) | r[4]) / 10
+        temp = ((r[5] << 8) | r[6]) / 10
+    else:
+        hum = temp = None
+
+    r = send_modbus_query(Q_EC)
+    ec = (r[3] << 8) | r[4] if r else None
+
+    r = send_modbus_query(Q_NPK)
+    if r and len(r) >= 9:
+        n = (r[3] << 8) | r[4]
+        p = (r[5] << 8) | r[6]
+        k = (r[7] << 8) | r[8]
+    else:
+        n = p = k = None
+
+    led_stop()
+
+    print("pH:", ph)
+    print("Humedad:", hum, "%")
+    print("Temperatura:", temp, "°C")
+    print("EC:", ec, "uS/cm")
+    print("N:", n, "mg/kg")
+    print("P:", p, "mg/kg")
+    print("K:", k, "mg/kg")
+    print("-----------------------")
+
+# =========================
+# BUCLE PRINCIPAL
+# =========================
 def main():
+    ultimo_chequeo = time.time() - CHECK_INTERVAL  # chequea inmediatamente al arrancar
+
     while True:
-        led_start()
-        r = send_modbus_query(Q_PH)
-        ph = ((r[3] << 8) | r[4]) / 100 if r else None
-        r = send_modbus_query(Q_HUM_TEMP)
-        if r and len(r) >= 7:
-            hum  = ((r[3] << 8) | r[4]) / 10
-            temp = ((r[5] << 8) | r[6]) / 10
-        else:
-            hum = temp = None
-        r = send_modbus_query(Q_EC)
-        ec = (r[3] << 8) | r[4] if r else None
-        r = send_modbus_query(Q_NPK)
-        if r and len(r) >= 9:
-            n = (r[3] << 8) | r[4]
-            p = (r[5] << 8) | r[6]
-            k = (r[7] << 8) | r[8]
-        else:
-            n = p = k = None
-        led_stop()
-        print("pH:", ph)
-        print("Humedad:", hum, "%")
-        print("Temperatura:", temp, "°C")
-        print("EC:", ec, "uS/cm")
-        print("N:", n, "mg/kg")
-        print("P:", p, "mg/kg")
-        print("K:", k, "mg/kg")
-        print("-----------------------")
+        # Chequear OTA cada CHECK_INTERVAL segundos
+        if time.time() - ultimo_chequeo >= CHECK_INTERVAL:
+            check_and_update()
+            ultimo_chequeo = time.time()
+
+        # Leer y mostrar sensor
+        leer_sensor()
         time.sleep(2)
 
 if __name__ == "__main__":
     main()
+
